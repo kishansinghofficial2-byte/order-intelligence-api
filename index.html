@@ -1,73 +1,88 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Data Intelligence Dashboard</title>
+    <title>Data Tool</title>
 </head>
-<body style="font-family: Arial; text-align:center; padding:40px;">
+<body style="text-align:center; font-family:Arial;">
 
-    <h1>🚀 Data Intelligence Dashboard</h1>
+<h1>Data Cleaner</h1>
 
-    <input type="file" id="fileInput"><br><br>
+<input type="file" id="fileInput"><br><br>
 
-    <button onclick="analyze()">Analyze</button>
-    <button onclick="download()">Download</button>
+<button onclick="analyze()">Analyze</button>
+<button onclick="download()">Download</button>
 
-    <h2>📊 Insights</h2>
-    <div id="insights"></div>
+<h3 id="status"></h3>
 
-    <h2>🔍 Preview</h2>
-    <table border="1" id="previewTable" style="margin:auto;"></table>
+<div id="insights"></div>
+<table border="1" id="previewTable" style="margin:auto;"></table>
 
 <script>
 let fileId = null;
 
-// ⚠️ Yaha apna backend link daal
 const API_URL = "https://order-intelligence-api-1.onrender.com";
-
 
 async function analyze() {
     let file = document.getElementById("fileInput").files[0];
 
+    if (!file) {
+        alert("File select kar!");
+        return;
+    }
+
+    document.getElementById("status").innerText = "Processing...";
+
     let formData = new FormData();
     formData.append("file", file);
 
-    let res = await fetch(API_URL + "/analyze/", {
-        method: "POST",
-        body: formData
-    });
-
-    let data = await res.json();
-
-    fileId = data.file_id;
-
-    // Insights show
-    let ins = data.insights;
-    document.getElementById("insights").innerHTML =
-        "Total: " + ins.total_rows +
-        "<br>Valid: " + ins.valid_numbers +
-        "<br>Invalid: " + ins.invalid_numbers +
-        "<br>Duplicates: " + ins.duplicate_numbers;
-
-    // Preview show
-    let table = document.getElementById("previewTable");
-    table.innerHTML = "";
-
-    if (data.preview.length > 0) {
-        let headers = Object.keys(data.preview[0]);
-
-        let row = table.insertRow();
-        headers.forEach(h => {
-            let cell = row.insertCell();
-            cell.innerHTML = "<b>" + h + "</b>";
+    try {
+        let res = await fetch(API_URL + "/analyze/", {
+            method: "POST",
+            body: formData
         });
 
-        data.preview.forEach(item => {
+        let data = await res.json();
+
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        fileId = data.file_id;
+
+        document.getElementById("status").innerText = "Done ✅";
+
+        let ins = data.insights;
+        document.getElementById("insights").innerHTML =
+            "Total: " + ins.total_rows +
+            "<br>Valid: " + ins.valid_numbers +
+            "<br>Invalid: " + ins.invalid_numbers +
+            "<br>Duplicates: " + ins.duplicate_numbers;
+
+        let table = document.getElementById("previewTable");
+        table.innerHTML = "";
+
+        if (data.preview.length > 0) {
+            let headers = Object.keys(data.preview[0]);
+
             let row = table.insertRow();
             headers.forEach(h => {
                 let cell = row.insertCell();
-                cell.innerText = item[h];
+                cell.innerHTML = "<b>" + h + "</b>";
             });
-        });
+
+            data.preview.forEach(item => {
+                let row = table.insertRow();
+                headers.forEach(h => {
+                    let cell = row.insertCell();
+                    cell.innerText = item[h];
+                });
+            });
+        }
+
+    } catch (err) {
+        console.log(err);
+        alert("Error aaya, console check kar!");
     }
 }
 
