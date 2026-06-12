@@ -1,14 +1,11 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-import re
-import csv
-from io import StringIO
-from collections import Counter
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import FileResponse
+import pandas as pd
+import io
+import uuid
 
 app = FastAPI()
-
-# ✅ CORS FIX (buttons issue solve)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,161 +14,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# 🔥 Clean phone
-def clean_phone(phone: str):
-    digits = re.sub(r"\D", "", phone)
-
-    if digits.startswith("0"):
-        digits = digits[1:]
-
-    if len(digits) == 10:
-        return "+91" + digits
-    elif len(digits) == 12 and digits.startswith("91"):
-        return "+" + digits
-    else:
-        return "INVALID"
-
-
-# 🔥 Detect phone column
-def detect_phone_column(fieldnames):
-    for field in fieldnames:
-        if "phone" in field.lower() or "mobile" in field.lower():
-            return field
-    return None
-
-
-# 🔥 Risk + Reason
-def get_risk_and_reason(number, count):
-    if number == "INVALID":
-        return "HIGH", "Invalid number"
-    elif count > 3:
-        return "HIGH", "Repeated many times"
-    elif count > 1:
-        return "MEDIUM", "Duplicate number"
-    else:
-        return "LOW", "Normal"
-
-
+# Home route
 @app.get("/")
 def home():
-    return {"message": "Business Data Intelligence API 🚀"}
+    return {"message": "API is running 🚀"}
 
 
-# 🔥 ANALYZE
+# GLOBAL STORAGE (temporary)
+processed_data_store = {}
+
+
+# 🔥 ANALYZE CSV
 @app.post("/analyze/")
 async def analyze(file: UploadFile = File(...)):
     content = await file.read()
-    csv_data = StringIO(content.decode("utf-8"))
+    df = pd.read_csv(io.StringIO(content.decode("utf-8")))
 
-    reader = csv.DictReader(csv_data)
-    phone_column = detect_phone_column(reader.fieldnames)
+    # 🔍 Auto detect phone column
+    phone_col = None
+    for col in df.columns:
+        if "phone" in col.lower() or "mobile" in col.lower():
+            phone_col = col
+            break
 
-    if not phone_column:
+    if not phone_col:
         return {"error": "No phone column found"}
 
-    rows = list(reader)
+    # 📞 Clean numbers
+    df[phone_col] = df[phone_col].astype(str).str.replace(r"\D", "", regex=True)
 
-    cleaned_numbers = []
-    for row in rows:
-        cleaned = clean_phone(row.get(phone_column, ""))
-        cleaned_numbers.append(cleaned)
+    # ❌ Invalid numbers
+    invalid = df[~df[phone_col].str.match(r"^[6-9]\d{9}$")]
 
-    counts = Counter(cleaned_numbers)
+    # 🔁 Duplicates
+    duplicates = df[df.duplicated(subset=[phone_col], keep=False)]
 
-    preview = []
-    total = 0
-    high = 0
-    medium = 0
-    low = 0
-    invalid = 0
+    # ✅ Clean unique
+    clean_df = df.drop_duplicates(subset=[phone_col])
+    clean_df = clean_df[clean_df[phone_col].str.match(r"^[6-9]\d{9}$")]
 
-    for row in rows:
-        cleaned = clean_phone(row.get(phone_column, ""))
-        risk, reason = get_risk_and_reason(cleaned, counts[cleaned])
+    # 📊 Insights
+    insights = {
+        "total_rows": len(df),
+        "valid_numbers": len(clean_df),
+        "invalid_numbers": len(invalid),
+        "duplicate_numbers": len(duplicates)
+    }
 
-        if cleaned == "INVALID":
-            invalid += 1
+    # 🆔 Store result
+    file_id = str(uuid.uuid4())
+    processed_data_store[file_id] = clean_df
 
-        if risk == "HIGH":
-            high += 1
-        elif risk == "MEDIUM":
-            medium += 1
-        else:
-            low += 1
-
-        row["cleaned_phone"] = cleaned
-        row["risk"] = risk
-        row["risk_reason"] = reason
-
-        if total < 5:
-            preview.append(row)
-
-        total += 1
-
-    duplicate_count = sum(1 for c in counts.values() if c > 1)
-    high_percent = round((high / total) * 100, 2) if total > 0 else 0
-
-    if high_percent > 30:
-        insight = "⚠️ High fraud risk detected"
-    elif high_percent > 10:
-        insight = "⚠️ Moderate risk detected"
-    else:
-        insight = "✅ Data looks clean"
+    # 🔍 Preview (top 5 rows)
+    preview = clean_df.head().to_dict(orient="records")
 
     return {
-        "summary": {
-            "total_rows": total,
-            "high_risk": high,
-            "medium_risk": medium,
-            "low_risk": low,
-            "invalid_numbers": invalid,
-            "duplicate_entries": duplicate_count,
-            "high_risk_percent": high_percent
-        },
-        "insight": insight,
+        "file_id": file_id,
+        "insights": insights,
         "preview": preview
     }
 
 
-# 🔥 DOWNLOAD
-@app.post("/download-result/")
-async def download_result(file: UploadFile = File(...)):
-    content = await file.read()
-    csv_data = StringIO(content.decode("utf-8"))
+# 📥 DOWNLOAD CLEAN DATA
+@app.get("/download/{file_id}")
+def download(file_id: str):
+    if file_id not in processed_data_store:
+        return {"error": "Invalid file_id"}
 
-    reader = csv.DictReader(csv_data)
-    phone_column = detect_phone_column(reader.fieldnames)
+    df = processed_data_store[file_id]
 
-    rows = list(reader)
+    file_path = f"cleaned_{file_id}.csv"
+    df.to_csv(file_path, index=False)
 
-    cleaned_numbers = []
-    for row in rows:
-        cleaned = clean_phone(row.get(phone_column, ""))
-        cleaned_numbers.append(cleaned)
-
-    counts = Counter(cleaned_numbers)
-
-    output = StringIO()
-    fieldnames = reader.fieldnames + ["cleaned_phone", "risk", "risk_reason"]
-
-    writer = csv.DictWriter(output, fieldnames=fieldnames)
-    writer.writeheader()
-
-    for row in rows:
-        cleaned = clean_phone(row.get(phone_column, ""))
-        risk, reason = get_risk_and_reason(cleaned, counts[cleaned])
-
-        row["cleaned_phone"] = cleaned
-        row["risk"] = risk
-        row["risk_reason"] = reason
-
-        writer.writerow(row)
-
-    output.seek(0)
-
-    return StreamingResponse(
-        output,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=analyzed_data.csv"}
-    )
+    return FileResponse(file_path, filename="cleaned_data.csv")
